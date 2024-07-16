@@ -26,6 +26,10 @@ import torch
 from .initialize import get_model_parallel_group
 from .utils import split_tensor_along_last_dim
 
+import time
+
+warmup = 0
+repeat = 1
 
 def _reduce(ctx: Any, input_: torch.Tensor) -> torch.Tensor:
     """All-reduce the the input tensor across model parallel group."""
@@ -37,10 +41,20 @@ def _reduce(ctx: Any, input_: torch.Tensor) -> torch.Tensor:
     # Bypass the function if we are using only 1 GPU.
     if torch.distributed.get_world_size(group=group) == 1:
         return input_
-
-    # All-reduce.
-    torch.distributed.all_reduce(input_, group=group)
-
+    for i in range(warmup):
+        torch.distributed.all_reduce(input_, group=group)
+        torch.distributed.barrier()
+    # Measure the time for gather
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(repeat):
+        torch.distributed.all_reduce(input_, group=group)
+        torch.distributed.barrier()
+    end_event.record()
+    end_event.synchronize()
+    elapsed_time_ms = start_event.elapsed_time(end_event)
+    print(f"Reduce Tensor with shape = {input_.shape}, reduce_duration = {elapsed_time_ms/repeat}")
     return input_
 
 
@@ -79,11 +93,23 @@ def _gather(input_: torch.Tensor) -> torch.Tensor:
 
     tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
     tensor_list[rank] = input_
-    torch.distributed.all_gather(tensor_list, input_, group=group)
-
+    for i in range(warmup):
+        torch.distributed.all_gather(tensor_list, input_, group=group)
+        torch.distributed.barrier()
+    # Measure the time for gather
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+    for i in range(repeat):
+        torch.distributed.all_gather(tensor_list, input_, group=group)
+        torch.distributed.barrier()
     # Note: torch.cat already creates a contiguous tensor.
     output = torch.cat(tensor_list, dim=last_dim).contiguous()
-
+    
+    end_event.record()
+    end_event.synchronize()
+    elapsed_time_ms = start_event.elapsed_time(end_event)
+    print(f"Gather Tensor with inshape = {input_.shape}, outshape = {output.shape}, gather_duration = {elapsed_time_ms/repeat}")
     return output
 
 

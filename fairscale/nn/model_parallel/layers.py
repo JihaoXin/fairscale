@@ -145,6 +145,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         # Mask the output embedding.
         output_parallel[input_mask, :] = 0.0
         # Reduce across all the model parallel GPUs.
+        print("Allreduce from VocabParallelEmbedding")
         output = reduce_from_model_parallel_region(output_parallel)
         return output
 
@@ -290,6 +291,7 @@ class ColumnParallelLinear(torch.nn.Module):
         output_parallel = F.linear(input_parallel, self.weight, self.bias)
         if self.gather_output:
             # All-gather across the partitions.
+            print("Allgather from ColumnParallelLinear")
             output = gather_from_model_parallel_region(output_parallel)
         else:
             output = output_parallel
@@ -379,6 +381,7 @@ class RowParallelLinear(torch.nn.Module):
         # Matrix multiply.
         output_parallel = F.linear(input_parallel, self.weight)
         # All-reduce across all the partitions.
+        print("Allreduce from RowParallelLinear")
         output_ = reduce_from_model_parallel_region(output_parallel)
         if self.bias is not None:
             output = output_ + self.bias
